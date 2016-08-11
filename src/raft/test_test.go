@@ -50,16 +50,19 @@ func TestReElection(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 
 	// if the leader disconnects, a new one should be elected.
+	fmt.Printf("disconnect leader1 ...\n")
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the old leader.
+	fmt.Printf("leader1 rejoin...\n")
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
 
 	// if there's no quorum, no leader should
 	// be elected.
+	fmt.Printf("disconnect leader2 ...\n")
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
@@ -111,6 +114,7 @@ func TestFailAgree(t *testing.T) {
 	// follower network failure
 	leader := cfg.checkOneLeader()
 	cfg.disconnect((leader + 1) % servers)
+	fmt.Printf(".... disconnect node %d \n", (leader + 1) % servers)
 
 	// agree despite one failed server?
 	cfg.one(102, servers-1)
@@ -121,6 +125,8 @@ func TestFailAgree(t *testing.T) {
 
 	// failed server re-connected
 	cfg.connect((leader + 1) % servers)
+	fmt.Printf(".... rejoin node %d \n", (leader + 1) % servers)
+
 
 	// agree with full set of servers?
 	cfg.one(106, servers)
@@ -141,6 +147,7 @@ func TestFailNoAgree(t *testing.T) {
 
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
+	fmt.Printf("####Begin, leader is \n", leader)
 	cfg.disconnect((leader + 1) % servers)
 	cfg.disconnect((leader + 2) % servers)
 	cfg.disconnect((leader + 3) % servers)
@@ -161,6 +168,7 @@ func TestFailNoAgree(t *testing.T) {
 	}
 
 	// repair failures
+	fmt.Printf("####Repair failures \n")
 	cfg.connect((leader + 1) % servers)
 	cfg.connect((leader + 2) % servers)
 	cfg.connect((leader + 3) % servers)
@@ -176,6 +184,8 @@ func TestFailNoAgree(t *testing.T) {
 	if index2 < 2 || index2 > 3 {
 		t.Fatalf("unexpected index %v", index2)
 	}
+
+	fmt.Printf("####Leader is %d ...\n", leader2)
 
 	cfg.one(1000, servers)
 

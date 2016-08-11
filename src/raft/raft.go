@@ -257,9 +257,11 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 					rf.role = LEADER
 					// init the nextIndex
 					rf.nextIndex = make([]int, len(rf.peers))
+					rf.matchIndex = make([]int, len(rf.peers))
 					index := rf.getLastIndex() + 1
 					for idx := 0; idx < len(rf.peers); idx++ {
 						rf.nextIndex[idx] = index
+						rf.matchIndex[idx] = 0
 					}
 					rf.roleChangeMsg <- true
 				}
@@ -271,22 +273,34 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 }
 
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
-	rf.resetTimeoutMsg <- true
+	fmt.Printf(".... follower %d get request from leader\n", rf.me)
+	rf.mu.Lock()
+	defer func () {
+		rf.mu.Unlock()
+		rf.resetTimeoutMsg <- true
+	}()
 
-	// heart beat
-	if len(args.Entries) == 0 {
-		return
+	if rf.role == CANDIDATE {
+		rf.role = FOLLOWER
+		rf.roleChangeMsg <- true
+		rf.currentTerm = args.Term
 	}
+
+	fmt.Printf("AppendEntries!!! Follower %d, args.Term: %d,  currentTerm: %d\n",
+		rf.me, args.Term, rf.currentTerm)
 
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		reply.Term = rf.currentTerm
+		reply.LastIndex = rf.getLastIndex()
 
 		return
 	}
 
 	item := rf.log[args.PrevLogIndex]
 
+	fmt.Printf("AppendEntries!!! Follower %d, args.PrevLogTerm: %d,  item.LogTerm: %d\n",
+		rf.me, args.PrevLogTerm, item.LogTerm)
 	if args.PrevLogTerm != item.LogTerm {
 		reply.Success = false
 		reply.Term = rf.currentTerm
@@ -310,23 +324,39 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			rf.commitIndex = lastIdx
 		}
 
+		fmt.Printf("Follower %d commtied!\n", rf.me)
 		rf.commitMsg <- true
+
 	}
 
-	fmt.Printf(".... server %d appends log!! log entry: %d, term: %d, lastIndex: %d\n", rf.me, rf.log, reply.Term, reply.LastIndex)
+	fmt.Printf(".... server %d appends log!! log entry: %d, term: %d, lastIndex: %d\n",
+		rf.me, rf.log, reply.Term, reply.LastIndex)
 
 	return
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	fmt.Printf(".... leader %d send append entries to server: %d\n", rf.me, server)
+
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+
+	fmt.Printf(".... leader %d get response from server: %d, res: %s \n", rf.me, server, ok)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	if rf.role == LEADER {
 		if ok {
 			if reply.Success {
-				rf.nextIndex[server] = reply.LastIndex + 1
+				//rf.nextIndex[server] = reply.LastIndex + 1
+				fmt.Printf(".... leader %d get successful reply from server: %d \n", rf.me, server)
+				rf.nextIndex[server] += len(args.Entries)
+				rf.matchIndex[server] = rf.nextIndex[server] - 1
+			} else {
+				if reply.LastIndex >= rf.matchIndex[server] {
+					rf.nextIndex[server] = reply.LastIndex + 1
+				} else {
+					rf.nextIndex[server] = rf.matchIndex[server] + 1
+				}
 			}
 		}
 	}
@@ -358,8 +388,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// update the log entry
 		rf.log = append(rf.log, LogEntry{command, term})
 		index = rf.getLastIndex()
-		rf.commitIndex = index
-		rf.commitMsg <- true
+		//rf.commitIndex = index
+		//rf.commitMsg <- true
 		fmt.Printf(".... server %d log the entry command: %s, term: %d, index: %d\n", rf.me, command, term, index)
 	}
 
@@ -397,6 +427,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here.
 	rf.role = FOLLOWER
 	rf.votedFor = -1
+	rf.commitIndex = 0
 	rf.log = append(rf.log, LogEntry{LogTerm: 0})
 	rf.resetTimeoutMsg = make(chan bool)
 	rf.roleChangeMsg = make(chan bool)
@@ -464,6 +495,7 @@ func candidateDeamon(rf *Raft) {
 			case <-rf.roleChangeMsg:
 			case <-time.After(time.Duration(350) * time.Millisecond):
 				fmt.Printf(".... time out %d \n", rf.me)
+				sendVoteToAllServers(rf)
 			}
 		} else {
 			select {
@@ -477,7 +509,8 @@ func commitHandler(rf *Raft, applyCh chan ApplyMsg) {
 	for {
 		select {
 		case <-rf.commitMsg:
-			fmt.Println("### %d, %d, %d", rf.me,rf.lastApplied,rf.commitIndex)
+			fmt.Printf("...handle commit msg, server: %d, lastApplied: %d, commitIndex: %d \n",
+				rf.me, rf.lastApplied, rf.commitIndex)
 			commitIndex := rf.commitIndex
 			for i := rf.lastApplied+1; i <= commitIndex; i++ {
 				msg := ApplyMsg{Index: i, Command: rf.log[i].Command}
@@ -519,6 +552,28 @@ func sendAppendLogToAllServers(rf *Raft) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.role == LEADER {
+		N := rf.commitIndex
+		last := rf.getLastIndex()
+		for i := rf.commitIndex + 1; i <= last; i++ {
+			num := 1
+			for j := range rf.peers {
+				if j != rf.me && rf.matchIndex[j] >= i && rf.log[i].LogTerm == rf.currentTerm {
+					num++
+				}
+			}
+			if 2*num > len(rf.peers) {
+				N = i
+			}
+		}
+
+		fmt.Printf("Leader %d, N: %d, commitIndex: %d \n", rf.me, N, rf.commitIndex)
+		if N != rf.commitIndex {
+			rf.commitIndex = N
+
+			fmt.Printf("Leader %d commtied!\n", rf.me)
+			rf.commitMsg <- true
+		}
+
 		for idx, _ := range rf.peers {
 			if idx != rf.me {
 				var reply AppendEntriesReply
