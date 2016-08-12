@@ -125,7 +125,7 @@ func TestFailAgree(t *testing.T) {
 
 	// failed server re-connected
 	cfg.connect((leader + 1) % servers)
-	fmt.Printf(".... rejoin node %d \n", (leader + 1) % servers)
+	fmt.Printf(".... disconnect node %d \n", (leader + 1) % servers)
 
 
 	// agree with full set of servers?
@@ -305,6 +305,7 @@ func TestRejoin(t *testing.T) {
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
+	fmt.Printf("Leader1 %d disconnect\n", leader1)
 
 	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
@@ -317,14 +318,19 @@ func TestRejoin(t *testing.T) {
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
+	fmt.Printf("Leader2 %d disconnect\n", leader2)
+
 
 	// old leader connected again
 	cfg.connect(leader1)
+	fmt.Printf("Leader1 %d connect\n", leader1)
+
 
 	cfg.one(104, 2)
 
 	// all together now
 	cfg.connect(leader2)
+	fmt.Printf("Leader2 %d connect\n", leader2)
 
 	cfg.one(105, servers)
 
