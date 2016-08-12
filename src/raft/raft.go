@@ -445,8 +445,6 @@ func (rf *Raft) sendAppendLogToAllServers() {
 				copy(args.Entries, rf.log[args.PrevLogIndex + 1:])
 				args.LeaderCommit = rf.commitIndex
 
-				fmt.Printf("!!! server: %d, index: %d, entries: %d, rf-log: %d \n",
-					i, rf.nextIndex[i] - 1, args.Entries, rf.log)
 				rf.sendAppendEntries(i, args, &reply)
 			}(i)
 		}
@@ -513,7 +511,7 @@ func (rf *Raft) followerDeamon() {
 			select {
 			case <-rf.heartbeatMsg:
 			case <-rf.grantVoteMsg:
-			case <-time.After(time.Duration(rand.Int63() % 300 + 100) * time.Millisecond):
+			case <-time.After(time.Duration(rand.Int63() % 444 + 400) * time.Millisecond):
 				rf.sendToCandidateMsg()
 			}
 		} else {
@@ -553,15 +551,15 @@ func (rf *Raft) candidateDeamon() {
 	for {
 		if rf.state == STATE_CANDIDATE {
 			select {
-			case <-time.After(time.Duration(rand.Int63() % 150 + 350) * time.Millisecond):
+			case <-time.After(time.Duration(rand.Int63() % 444 + 400) * time.Millisecond):
 				// TODO: should to redo the election, but it'll failed sthe rejoin case, I'm not sure how to fix.
-				//rf.mu.Lock()
-				//rf.currentTerm++
-				//rf.votedFor = rf.me
-				//rf.voteCount = 1
-				//rf.persist()
-				//rf.mu.Unlock()
-				//go rf.sendVoteToAllServers()
+				rf.mu.Lock()
+				rf.currentTerm++
+				rf.votedFor = rf.me
+				rf.voteCount = 1
+				rf.persist()
+				rf.mu.Unlock()
+				go rf.sendVoteToAllServers()
 			case <-rf.heartbeatMsg:
 				rf.state = STATE_FOLLOWER
 				fmt.Printf("CANDIDATE %v reveive chanHeartbeat\n",rf.me)

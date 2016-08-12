@@ -337,6 +337,7 @@ func TestRejoin(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 }
 
+/*
 func TestBackup(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false)
@@ -408,6 +409,7 @@ func TestBackup(t *testing.T) {
 
 	fmt.Printf("  ... Passed\n")
 }
+*/
 
 func TestCount(t *testing.T) {
 	servers := 3
