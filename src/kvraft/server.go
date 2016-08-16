@@ -48,7 +48,7 @@ type RaftKV struct {
 
 	// map which stores the KV value
 	kvMap   map[string]string
-	reqMap  map[int64]int
+	reqMap  map[int64]int64
 
 	res     map[int]chan Op
 }
@@ -68,7 +68,6 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		reply.WrongLeader = true
 	} else {
 		reply.WrongLeader = false
-		fmt.Printf("Get ... index: %d\n", index)
 
 		_,ok := kv.res[index]
 
@@ -82,7 +81,6 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		case msg:= <- kv.res[index]:
 			reply.Err = OK
 			reply.Value = kv.kvMap[args.Key]
-			fmt.Printf("Reply Get : %s, msg: %s \n", reply, msg)
 			if msg == command {
 				reply.Err = OK
 				reply.Value = kv.kvMap[args.Key]
@@ -116,7 +114,6 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !isLeader {
 		reply.WrongLeader = true
 	} else {
-		fmt.Printf("PutAppend index: %d\n", index)
 		reply.WrongLeader = false
 		//time.Sleep(time.Duration(2000) * time.Millisecond)
 		_,ok := kv.res[index]
@@ -155,6 +152,8 @@ func (kv *RaftKV) Execute(op *Op) {
 	case "Append":
 		kv.kvMap[op.Key] += op.Value
 	}
+
+	kv.reqMap[op.Cid] = op.Seq
 }
 //
 // the tester calls Kill() when a RaftKV instance won't
@@ -190,7 +189,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 	kv.res = make(map[int] chan Op)
 	kv.kvMap = make(map[string]string)
-	kv.reqMap = make(map[int64]int)
+	kv.reqMap = make(map[int64]int64)
 
 	// Your initialization code here.
 
@@ -202,12 +201,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			// listen the commit message
 			select {
 			case msg:= <- kv.applyCh:
-				fmt.Printf("Get commit message: %s \n", msg)
-
 				op := msg.Command.(Op)
 				kv.mu.Lock()
 
-				kv.Execute(&op)
+				if op.Seq > kv.reqMap[op.Cid] {
+					kv.Execute(&op)
+				}
 
 				// ack client that the operation has been commited
 				index := msg.Index
@@ -218,7 +217,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					channel = make(chan Op, 1)
 					kv.res[index] = channel
 				} else {
-					fmt.Printf("Return commit message: %s; op: %s, \n", msg, op)
 					kv.res[index] <- op
 				}
 				kv.mu.Unlock()

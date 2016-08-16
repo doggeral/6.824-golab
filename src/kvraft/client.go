@@ -15,6 +15,7 @@ type Clerk struct {
 	cid   int64
 	seq   int64
 	mu    sync.Mutex
+	cacheLeader  int
 }
 
 func nrand() int64 {
@@ -30,6 +31,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	// You'll have to add code here.
 	ck.cid = nrand()
 	ck.seq = 0
+	ck.cacheLeader = -1
 
 	return ck
 }
@@ -61,13 +63,26 @@ func (ck *Clerk) Get(key string) string {
 
 	// Retry until get the correct response
 	for {
-		for _, server := range ck.servers {
+		if ck.cacheLeader != -1 {
+			var reply GetReply
+			ok := ck.servers[ck.cacheLeader].Call("RaftKV.Get", &args, &reply)
+
+			if ok {
+				if !reply.WrongLeader {
+					fmt.Printf("get API response %s\n", reply)
+					return reply.Value
+				}
+			}
+		}
+
+		for idx, server := range ck.servers {
 			var reply GetReply
 			ok := server.Call("RaftKV.Get", &args, &reply)
 
 			if ok {
 				if !reply.WrongLeader {
 					fmt.Printf("get API response %s\n", reply)
+					ck.cacheLeader = idx
 					return reply.Value
 				}
 			}
