@@ -69,22 +69,19 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	} else {
 		reply.WrongLeader = false
 
-		_,ok := kv.res[index]
+		channel,ok := kv.res[index]
 
 		if !ok {
 			kv.res[index] = make(chan Op, 1)
+			channel = kv.res[index]
 		}
 
 		select {
-		// !!!Notice that it should use kv.res[index] instead to assigning kv.res[index] to a variable because
-		// the assignment operation will copy the content hence the listening on the selector never returns.
-		case msg:= <- kv.res[index]:
-			reply.Err = OK
-			reply.Value = kv.kvMap[args.Key]
+		case msg:= <- channel:
 			if msg == command {
 				reply.Err = OK
 				reply.Value = kv.kvMap[args.Key]
-				fmt.Printf("Reply Get : %s \n", reply)
+				//fmt.Printf("Reply Get : %s \n", reply)
 			} else {
 				reply.Err = Error
 				reply.WrongLeader = true
@@ -116,23 +113,20 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	} else {
 		reply.WrongLeader = false
 		//time.Sleep(time.Duration(2000) * time.Millisecond)
-		_,ok := kv.res[index]
+		channel,ok := kv.res[index]
 		if !ok {
 			kv.res[index] =  make(chan Op, 1)
+			channel = kv.res[index]
 		}
 
 		select {
-		case msg:= <- kv.res[index]:
-			reply.Err = OK
-			fmt.Printf("Reply PutAppend : %s, msg: %s \n", reply, msg)
-			//if msg == command {
-			//	reply.Err = OK
-			//	fmt.Printf("Reply PutAppend : %s \n", reply)
-			//} else {
-			//	reply.Err = Error
-			//	reply.WrongLeader = true
-			//	fmt.Printf("Reply PutAppend : %s \n", reply)
-			//}
+		case msg:= <- channel:
+			if msg == command {
+				reply.Err = OK
+			} else {
+				reply.Err = Error
+				reply.WrongLeader = true
+			}
 		case <-time.After(time.Duration(1000) * time.Millisecond):
 			reply.Err = Timeout
 			reply.WrongLeader = true
