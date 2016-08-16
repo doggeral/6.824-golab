@@ -5,6 +5,7 @@ import "crypto/rand"
 import (
 	"math/big"
 	"sync"
+	"fmt"
 )
 
 
@@ -66,6 +67,7 @@ func (ck *Clerk) Get(key string) string {
 
 			if ok {
 				if !reply.WrongLeader {
+					fmt.Printf("get API response %s\n", reply)
 					return reply.Value
 				}
 			}
@@ -107,6 +109,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 			if ok {
 				if !reply.WrongLeader {
+					fmt.Printf("put API response %s\n", reply)
 					return
 				}
 			}

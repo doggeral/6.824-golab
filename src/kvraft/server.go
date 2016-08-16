@@ -6,8 +6,8 @@ import (
 	"log"
 	"raft"
 	"sync"
-	"time"
 	"fmt"
+	"time"
 )
 
 const Debug = 1
@@ -48,6 +48,7 @@ type RaftKV struct {
 
 	// map which stores the KV value
 	kvMap   map[string]string
+	reqMap  map[int64]int
 
 	res     map[int]chan Op
 }
@@ -67,28 +68,35 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		reply.WrongLeader = true
 	} else {
 		reply.WrongLeader = false
+		fmt.Printf("Get ... index: %d\n", index)
 
-		channel,ok := kv.res[index]
+		_,ok := kv.res[index]
 
 		if !ok {
-			channel := make(chan Op)
-			kv.res[index] = channel
+			kv.res[index] = make(chan Op, 1)
 		}
 
 		select {
-		case msg:= <- channel:
+		// !!!Notice that it should use kv.res[index] instead to assigning kv.res[index] to a variable because
+		// the assignment operation will copy the content hence the listening on the selector never returns.
+		case msg:= <- kv.res[index]:
+			reply.Err = OK
+			reply.Value = kv.kvMap[args.Key]
+			fmt.Printf("Reply Get : %s, msg: %s \n", reply, msg)
 			if msg == command {
 				reply.Err = OK
 				reply.Value = kv.kvMap[args.Key]
+				fmt.Printf("Reply Get : %s \n", reply)
 			} else {
 				reply.Err = Error
+				reply.WrongLeader = true
 			}
-		case <-time.After(time.Duration(500) * time.Millisecond):
+		case <-time.After(time.Duration(1000) * time.Millisecond):
 			reply.Err = Timeout
+			reply.WrongLeader = true
+			fmt.Printf("Reply Get timeout\n")
 		}
 	}
-
-	fmt.Printf("Reply Get : %s \n", reply)
 
 	return
 
@@ -97,7 +105,7 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	var command Op
-	command.Type = "Put"
+	command.Type = args.Op
 	command.Key = args.Key
 	command.Value = args.Value
 	command.Cid = args.Cid
@@ -108,33 +116,39 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !isLeader {
 		reply.WrongLeader = true
 	} else {
+		fmt.Printf("PutAppend index: %d\n", index)
 		reply.WrongLeader = false
-
-		channel,ok := kv.res[index]
+		//time.Sleep(time.Duration(2000) * time.Millisecond)
+		_,ok := kv.res[index]
 		if !ok {
-			channel := make(chan Op)
-			kv.res[index] = channel
+			kv.res[index] =  make(chan Op, 1)
 		}
 
 		select {
-		case msg:= <- channel:
-			if msg == command {
-				reply.Err = OK
-			} else {
-				reply.Err = Error
-			}
-		case <-time.After(time.Duration(500) * time.Millisecond):
+		case msg:= <- kv.res[index]:
+			reply.Err = OK
+			fmt.Printf("Reply PutAppend : %s, msg: %s \n", reply, msg)
+			//if msg == command {
+			//	reply.Err = OK
+			//	fmt.Printf("Reply PutAppend : %s \n", reply)
+			//} else {
+			//	reply.Err = Error
+			//	reply.WrongLeader = true
+			//	fmt.Printf("Reply PutAppend : %s \n", reply)
+			//}
+		case <-time.After(time.Duration(1000) * time.Millisecond):
 			reply.Err = Timeout
+			reply.WrongLeader = true
+			fmt.Printf("Reply append timeout\n")
 		}
 	}
-
-	fmt.Printf("Reply PutAppend : %s \n", reply)
 
 	return
 
 }
 
 func (kv *RaftKV) Execute(op *Op) {
+	fmt.Printf("Op is %s\n", op)
 	switch op.Type {
 	case "Put":
 		kv.kvMap[op.Key] = op.Value
@@ -176,6 +190,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 	kv.res = make(map[int] chan Op)
 	kv.kvMap = make(map[string]string)
+	kv.reqMap = make(map[int64]int)
 
 	// Your initialization code here.
 
@@ -191,6 +206,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 				op := msg.Command.(Op)
 				kv.mu.Lock()
+
 				kv.Execute(&op)
 
 				// ack client that the operation has been commited
@@ -199,11 +215,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				channel,ok := kv.res[index]
 
 				if !ok {
-					channel := make(chan Op)
+					channel = make(chan Op, 1)
 					kv.res[index] = channel
 				} else {
-					fmt.Printf("Return commit message: %s \n", msg)
-					channel <- op
+					fmt.Printf("Return commit message: %s; op: %s, \n", msg, op)
+					kv.res[index] <- op
 				}
 				kv.mu.Unlock()
 
