@@ -488,73 +488,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-	//go func() {
-	//	for {
-	//		switch rf.state {
-	//		case STATE_FOLLOWER:
-	//			select {
-	//			case <-rf.chanHeartbeat:
-	//			case <-rf.chanGrantVote:
-	//			case <-time.After(time.Duration(rand.Int63()%333+550) * time.Millisecond):
-	//				rf.state = STATE_CANDIDATE
-	//			}
-	//		case STATE_LEADER:
-	//			//fmt.Printf("Leader:%v %v\n",rf.me,"boatcastAppendEntries	")
-	//			rf.sendAppendLogToAllServers()
-	//			time.Sleep(HBINTERVAL)
-	//		case STATE_CANDIDATE:
-	//			rf.mu.Lock()
-	//			rf.currentTerm++
-	//			rf.votedFor = rf.me
-	//			rf.voteCount = 1
-	//			rf.persist()
-	//			rf.mu.Unlock()
-	//			go rf.sendVoteToAllServers()
-	//			//fmt.Printf("%v become CANDIDATE %v\n",rf.me,rf.currentTerm)
-	//			select {
-	//			case <-time.After(time.Duration(rand.Int63()%333+550) * time.Millisecond):
-	//			case <-rf.chanHeartbeat:
-	//				rf.state = STATE_FOLLOWER
-	//			//	fmt.Printf("CANDIDATE %v reveive chanHeartbeat\n",rf.me)
-	//			case <-rf.chanLeader:
-	//				rf.mu.Lock()
-	//				rf.state = STATE_LEADER
-	//				//fmt.Printf("%v is Leader\n",rf.me)
-	//				rf.nextIndex = make([]int, len(rf.peers))
-	//				rf.matchIndex = make([]int, len(rf.peers))
-	//				for i := range rf.peers {
-	//					rf.nextIndex[i] = rf.getLastIndex() + 1
-	//					rf.matchIndex[i] = 0
-	//				}
-	//				rf.mu.Unlock()
-	//				//rf.boatcastAppendEntries()
-	//			}
-	//		}
-	//	}
-	//}()
 
 	go rf.leaderDeamon()
 	go rf.candidateDeamon()
 	go rf.followerDeamon()
 
-	go func() {
-		for {
-			select {
-			case <-rf.chanCommit:
-				//	println(rf.me,rf.lastApplied,rf.commitIndex)
-				rf.mu.Lock()
-				commitIndex := rf.commitIndex
-				for i := rf.lastApplied + 1; i <= commitIndex; i++ {
-					msg := ApplyMsg{Index: i, Command: rf.log[i].LogComd}
-					applyCh <- msg
-					rf.lastApplied = i
-				}
-				rf.mu.Unlock()
-			}
-		}
-	}()
+	go rf.commitHandler(applyCh)
 	return rf
 }
+
+
 
 func (rf *Raft) leaderDeamon() {
 	for {
@@ -563,6 +506,23 @@ func (rf *Raft) leaderDeamon() {
 			time.Sleep(HBINTERVAL)
 		} else {
 			time.Sleep(SLEEP)
+		}
+	}
+}
+
+func (rf *Raft) commitHandler(applyCh chan ApplyMsg) {
+	for {
+		select {
+		case <-rf.chanCommit:
+		//	println(rf.me,rf.lastApplied,rf.commitIndex)
+			rf.mu.Lock()
+			commitIndex := rf.commitIndex
+			for i := rf.lastApplied + 1; i <= commitIndex; i++ {
+				msg := ApplyMsg{Index: i, Command: rf.log[i].LogComd}
+				applyCh <- msg
+				rf.lastApplied = i
+			}
+			rf.mu.Unlock()
 		}
 	}
 }
