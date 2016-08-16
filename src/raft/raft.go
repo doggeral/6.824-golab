@@ -25,6 +25,7 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+	"runtime"
 )
 
 const (
@@ -537,7 +538,8 @@ func (rf *Raft) followerDeamon() {
 				rf.state = STATE_CANDIDATE
 			}
 		} else {
-			time.Sleep(SLEEP)
+			//time.Sleep(SLEEP)
+			runtime.Gosched()
 		}
 	}
 }
@@ -572,7 +574,8 @@ func (rf *Raft) candidateDeamon() {
 			//rf.boatcastAppendEntries()
 			}
 		} else {
-			time.Sleep(SLEEP)
+			//time.Sleep(SLEEP)
+			runtime.Gosched()
 		}
 	}
 }
