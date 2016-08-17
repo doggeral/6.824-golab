@@ -51,6 +51,7 @@ type ApplyMsg struct {
 
 type LogEntry struct {
 	LogTerm int
+	LogIndex int
 	LogComd interface{}
 }
 
@@ -96,10 +97,10 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 func (rf *Raft) getLastIndex() int {
-	return len(rf.log) - 1
+	return rf.log[len(rf.log) - 1].LogIndex
 }
 func (rf *Raft) getLastTerm() int {
-	return rf.log[len(rf.log)-1].LogTerm
+	return rf.log[len(rf.log) - 1].LogTerm
 }
 
 //
@@ -167,6 +168,60 @@ type AppendEntriesReply struct {
 	Term      int
 	Success   bool
 	NextIndex int
+}
+
+type InstallSnapshotArgs struct {
+	Term       int
+	LeaderId   int
+	LastIncludedIndex  int
+	LastIncludedTerm   int
+	Offset     int64
+	Data       []byte
+	Done       bool
+}
+
+type InstallSnapshotReply struct {
+	Term       int
+}
+
+func (rf *Raft) RequestInstallSnapshot(args RequestVoteArgs, reply *RequestVoteReply) {
+
+}
+
+func (rf *Raft) InstallSnapshot(args InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+
+		return
+	}
+
+	// get the heartbeat message
+	rf.chanHeartbeat <- true
+	rf.state = STATE_FOLLOWER
+
+	rf.persister.SaveSnapshot(args.Data)
+
+	// remove the unused log
+	lastIncludedIndex := args.LastIncludedIndex
+	lastIncludedTerm :=args.LastIncludedTerm
+
+	rf.log = rf.ClearLog(lastIncludedIndex, lastIncludedTerm, rf.log)
+}
+
+func (rf *Raft) ClearLog(lastIncludedIndex int, lastIncludedTerm int, log []LogEntry) []LogEntry{
+	res := make([]LogEntry, 0)
+
+	// leave the log[0] to mark the snapshot index and term
+	res = append(res, LogEntry{LogTerm: lastIncludedTerm, LogIndex: lastIncludedIndex})
+
+	for idx,logItem := range log {
+		if logItem.LogIndex == lastIncludedIndex && logItem.LogTerm == lastIncludedTerm {
+			res = append(res, log[idx + 1:]...)
+			break
+		}
+	}
+
+	return res
 }
 
 //
@@ -241,10 +296,12 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		return
 	}
 
-	term := rf.log[args.PrevLogIndex].LogTerm
-	app := true
+	baseIndex := rf.log[0].LogIndex
+
+	term := rf.log[args.PrevLogIndex - baseIndex].LogTerm
+
 	if args.PrevLogTerm != term {
-		for i := args.PrevLogIndex - 1; i >= 0; i-- {
+		for i := args.PrevLogIndex - baseIndex - 1; i >= 0; i-- {
 			if rf.log[i].LogTerm != term {
 				reply.NextIndex = i + 1
 				break
@@ -252,12 +309,13 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		}
 		return
 	}
-	if app {
-		rf.log = rf.log[:args.PrevLogIndex+1]
+
+	if args.PrevLogIndex >= baseIndex {
+		rf.log = rf.log[:args.PrevLogIndex+1-baseIndex]
 		rf.log = append(rf.log, args.Entries...)
+		reply.Success = true
+		reply.NextIndex = rf.getLastIndex() + 1
 	}
-	reply.Success = true
-	reply.NextIndex = rf.getLastIndex() + 1
 
 	//println(rf.me,rf.getLastIndex(),reply.NextIndex,rf.log)
 	if args.LeaderCommit > rf.commitIndex {
@@ -374,7 +432,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.state == STATE_LEADER
 	if isLeader {
 		index = rf.getLastIndex() + 1
-		rf.log = append(rf.log, LogEntry{LogTerm: term, LogComd: command}) // append new entry from client
+		rf.log = append(rf.log, LogEntry{LogTerm: term, LogComd: command, LogIndex:index}) // append new entry from client
 		rf.persist()
 	}
 	return index, term, isLeader
@@ -415,10 +473,12 @@ func (rf *Raft) sendAppendLogToAllServers() {
 	defer rf.mu.Unlock()
 	N := rf.commitIndex
 	last := rf.getLastIndex()
+	baseIndex:= rf.log[0].LogIndex
+
 	for i := rf.commitIndex + 1; i <= last; i++ {
 		num := 1
 		for j := range rf.peers {
-			if j != rf.me && rf.matchIndex[j] >= i && rf.log[i].LogTerm == rf.currentTerm {
+			if j != rf.me && rf.matchIndex[j] >= i && rf.log[i-baseIndex].LogTerm == rf.currentTerm {
 				num++
 			}
 		}
@@ -443,10 +503,10 @@ func (rf *Raft) sendAppendLogToAllServers() {
 
 				}
 			}
-			args.PrevLogTerm = rf.log[args.PrevLogIndex].LogTerm
+			args.PrevLogTerm = rf.log[args.PrevLogIndex - baseIndex].LogTerm
 			//args.Entries = make([]LogEntry, len(rf.log[args.PrevLogIndex + 1:]))
-			args.Entries = make([]LogEntry, len(rf.log[args.PrevLogIndex+1:]))
-			copy(args.Entries, rf.log[args.PrevLogIndex+1:])
+			args.Entries = make([]LogEntry, len(rf.log[args.PrevLogIndex+1-baseIndex:]))
+			copy(args.Entries, rf.log[args.PrevLogIndex+1-baseIndex:])
 
 			//copy(args.Entries, rf.log[args.PrevLogIndex + 1:])
 			args.LeaderCommit = rf.commitIndex
@@ -480,7 +540,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here.
 	rf.state = STATE_FOLLOWER
 	rf.votedFor = -1
-	rf.log = append(rf.log, LogEntry{LogTerm: 0})
+	rf.log = append(rf.log, LogEntry{LogTerm:0, LogIndex:0})
 	rf.currentTerm = 0
 	rf.chanCommit = make(chan bool, 100)
 	rf.chanHeartbeat = make(chan bool, 100)
@@ -519,7 +579,7 @@ func (rf *Raft) commitHandler(applyCh chan ApplyMsg) {
 			rf.mu.Lock()
 			commitIndex := rf.commitIndex
 			for i := rf.lastApplied + 1; i <= commitIndex; i++ {
-				msg := ApplyMsg{Index: i, Command: rf.log[i].LogComd}
+				msg := ApplyMsg{Index: i, Command: rf.log[i - rf.log[0].LogIndex].LogComd}
 				applyCh <- msg
 				rf.lastApplied = i
 			}
