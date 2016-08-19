@@ -18,6 +18,11 @@ type ViewServer struct {
 
 
 	// Your declarations here.
+	currentView   View
+	currenTick    uint
+	primaryTick   uint
+	primaryACK    uint
+	backupTick    uint
 }
 
 //
@@ -26,8 +31,63 @@ type ViewServer struct {
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 
 	// Your code here.
+	log.Println("ping...")
+
+	name := args.Me
+	num := args.Viewnum
+
+	switch name {
+	case vs.currentView.Primary:
+		if num == vs.currentView.Viewnum {
+			vs.primaryACK = num
+			vs.primaryTick = vs.currenTick
+		} else {
+			// change the backup to primary
+			if vs.isACKed() {
+				vs.currentView.Viewnum ++
+				vs.currentView.Primary = vs.currentView.Backup
+				vs.currentView.Backup = ""
+				vs.primaryTick = vs.backupTick
+			}
+		}
+	case vs.currentView.Backup:
+		if (num != vs.currentView.Viewnum) {
+			if vs.isACKed() {
+				vs.currentView.Backup = ""
+			}
+		} else {
+			vs.backupTick = vs.currenTick
+		}
+	default:
+		// view server init, accept the first client which pings it as primary.
+		if vs.currentView.Viewnum == 0 {
+			log.Println("get the leader...")
+			vs.currentView.Primary = name
+			vs.currentView.Viewnum++
+			vs.primaryTick = vs.currenTick
+			vs.primaryACK = 0
+			log.Println("current view %s", vs.currentView)
+			break;
+		}
+
+		if vs.currentView.Backup == "" {
+			if vs.isACKed() {
+				vs.currentView.Backup = name
+				vs.currentView.Viewnum++
+				vs.backupTick = vs.currenTick
+				log.Println("get back up, name is %s", vs.currentView.Backup)
+			}
+		}
+	}
+
+	reply.View = vs.currentView
 
 	return nil
+}
+
+
+func (vs *ViewServer) isACKed() bool{
+	return vs.currentView.Viewnum == vs.primaryACK
 }
 
 //
@@ -36,7 +96,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 
 	// Your code here.
-
+	reply.View = vs.currentView
 	return nil
 }
 
@@ -48,7 +108,32 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 //
 func (vs *ViewServer) tick() {
 
+	log.Println("tick...")
 	// Your code here.
+	vs.currenTick ++
+
+	primary := vs.currentView.Primary
+	backup  := vs.currentView.Backup
+
+	if primary != "" && vs.primaryTick + DeadPings < vs.currenTick {
+		// change the primary
+		if vs.isACKed() {
+			vs.currentView.Viewnum ++
+			vs.currentView.Primary = backup
+			vs.currentView.Backup = ""
+			vs.primaryTick = vs.backupTick
+		}
+	}
+
+	if backup != "" && vs.backupTick + DeadPings < vs.currenTick {
+		if vs.isACKed() {
+			vs.currentView.Viewnum ++
+			vs.currentView.Backup = ""
+		}
+	}
+
+	log.Println("Current view is %s", vs.currentView)
+
 }
 
 //
@@ -77,6 +162,11 @@ func StartServer(me string) *ViewServer {
 	vs := new(ViewServer)
 	vs.me = me
 	// Your vs.* initializations here.
+
+	vs.backupTick = 0
+	vs.currenTick = 0
+	vs.currentView = View{Primary:"", Backup:"", Viewnum:0}
+	vs.primaryACK = 999999
 
 	// tell net/rpc about our RPC server and handlers.
 	rpcs := rpc.NewServer()
