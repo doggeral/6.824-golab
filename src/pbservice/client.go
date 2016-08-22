@@ -5,12 +5,17 @@ import "net/rpc"
 import "fmt"
 
 import "crypto/rand"
-import "math/big"
+import (
+	"math/big"
+	"time"
+)
 
 
 type Clerk struct {
 	vs *viewservice.Clerk
 	// Your declarations here
+
+	primary string
 }
 
 // this may come in handy.
@@ -25,6 +30,8 @@ func MakeClerk(vshost string, me string) *Clerk {
 	ck := new(Clerk)
 	ck.vs = viewservice.MakeClerk(me, vshost)
 	// Your ck.* initializations here
+
+	ck.primary = ""
 
 	return ck
 }
@@ -64,6 +71,13 @@ func call(srv string, rpcname string,
 	return false
 }
 
+func (ck *Clerk) updatePrimary() {
+	view, error := ck.vs.Ping(0)
+
+	if error == nil {
+		ck.primary = view.Primary
+	}
+}
 //
 // fetch a key's value from the current primary;
 // if they key has never been set, return "".
@@ -74,8 +88,22 @@ func call(srv string, rpcname string,
 func (ck *Clerk) Get(key string) string {
 
 	// Your code here.
+	if ck.primary == "" {
+		ck.updatePrimary()
+	}
 
-	return "???"
+	for {
+		args := GetArgs{Key:key}
+		var reply GetReply
+		ok := call(ck.primary, "PBServer.Get", &args, &reply)
+
+		if ok {
+			return reply.Value
+		}
+
+		time.Sleep(viewservice.PingInterval)
+		ck.updatePrimary()
+	}
 }
 
 //
@@ -84,6 +112,22 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	// Your code here.
+	if ck.primary == "" {
+		ck.updatePrimary()
+	}
+
+	for {
+		args := PutAppendArgs{Key:key, Value:value, Type:op, IsReplica:false}
+		var reply GetReply
+		ok := call(ck.primary, "PBServer.PutAppend", &args, &reply)
+
+		if ok {
+			return
+		}
+
+		time.Sleep(viewservice.PingInterval)
+		ck.updatePrimary()
+	}
 }
 
 //

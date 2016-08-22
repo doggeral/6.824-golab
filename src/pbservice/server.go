@@ -22,12 +22,21 @@ type PBServer struct {
 	me         string
 	vs         *viewservice.Clerk
 	// Your declarations here.
+
+	kvMap      map[string]string
+	lovalView  viewservice.View
+	state      string
 }
 
 
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 
 	// Your code here.
+	if pb.isActivePrimary() {
+		reply.Value = pb.kvMap[args.Key]
+	} else {
+		reply.Err = "Not primary"
+	}
 
 	return nil
 }
@@ -36,11 +45,46 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
 
 	// Your code here.
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+
+	if pb.isActivePrimary() && pb.lovalView.Backup != "" {
+		replicaArgs := PutAppendArgs{Key:args.Key, Type:args.Type, Value:args.Value, IsReplica:true}
+		success := pb.doReplication(pb.lovalView.Backup, &replicaArgs)
+
+		if !success {
+			reply.Err = "Replicate to backup error!"
+			return nil
+		}
+	}
+
+	if pb.isActivePrimary() || args.IsReplica {
+		if args.Type == "Put" {
+			pb.kvMap[args.Key] = args.Value
+		} else if args.Type == "Append" {
+			val,ok := pb.kvMap[args.Key]
+
+			if ok {
+				pb.kvMap[args.Key] = val + args.Value
+			} else {
+				pb.kvMap[args.Key] = args.Value
+			}
+		}
+	} else {
+		reply.Err = "The server is not primary or not valid to do the replication"
+	}
 
 
 	return nil
 }
 
+func (pb *PBServer) isActivePrimary () bool{
+	if pb.state == "PRIMARY" {
+		return true
+	}
+
+	return  false
+}
 
 //
 // ping the viewserver periodically.
@@ -51,6 +95,38 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 func (pb *PBServer) tick() {
 
 	// Your code here.
+	view,_ := pb.vs.Ping(pb.lovalView.Viewnum)
+
+	// Replica all data to new backup server
+	if pb.isActivePrimary() && view.Backup != "" && pb.lovalView.Backup != view.Backup {
+		log.Println("%s replica all", pb.me)
+		for key,value := range pb.kvMap {
+			replicaArgs := PutAppendArgs{Key:key, Type:"Put", Value:value, IsReplica:true}
+			pb.doReplication(view.Backup, &replicaArgs)
+		}
+	}
+	pb.lovalView = view
+
+	if view.Primary == pb.me {
+		pb.state = "PRIMARY"
+	} else if view.Backup == pb.me {
+		pb.state = "BACKUP"
+	} else {
+		pb.state = "NONE"
+	}
+
+}
+
+func (pb *PBServer) doReplication(backup string, args *PutAppendArgs) bool {
+	// replica the data to backup
+	backupReply := PutAppendReply{}
+	ok := call(backup, "PBServer.PutAppend", &args, &backupReply)
+	if ok == false {
+		log.Println("Replica error, %s", args)
+		return false
+	}
+
+	return true
 }
 
 // tell the server to shut itself down.
@@ -84,6 +160,9 @@ func StartServer(vshost string, me string) *PBServer {
 	pb.me = me
 	pb.vs = viewservice.MakeClerk(me, vshost)
 	// Your pb.* initializations here.
+	pb.kvMap = make(map[string] string)
+	pb.state = "NONE"
+	pb.lovalView = viewservice.View{0, "", ""}
 
 	rpcs := rpc.NewServer()
 	rpcs.Register(pb)

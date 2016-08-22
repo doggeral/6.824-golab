@@ -16,6 +16,8 @@ type PutAppendArgs struct {
 
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Type  string
+	IsReplica bool
 }
 
 type PutAppendReply struct {
