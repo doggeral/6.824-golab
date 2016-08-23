@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"time"
 	"strconv"
+	"log"
 )
 
 
@@ -100,7 +101,8 @@ func (ck *Clerk) Get(key string) string {
 		var reply GetReply
 		ok := call(ck.primary, "PBServer.Get", &args, &reply)
 
-		if ok {
+		log.Println("reply %s", reply.Err)
+		if ok && (reply.Err == OK || reply.Err == Duplicate){
 			return reply.Value
 		}
 
@@ -126,7 +128,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		var reply GetReply
 		ok := call(ck.primary, "PBServer.PutAppend", &args, &reply)
 
-		if ok {
+		log.Println("reply %s", reply.Err)
+		if ok && (reply.Err == OK || reply.Err == Duplicate) {
 			return
 		}
 

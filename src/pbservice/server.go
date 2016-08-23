@@ -38,6 +38,7 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 	// Your code here.
 	if pb.isActivePrimary() {
 		reply.Value = pb.kvMap[args.Key]
+		reply.Err = OK
 	} else {
 		reply.Err = "Not primary"
 	}
@@ -56,9 +57,6 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 	reqStatus, ok := pb.reqStatus[rid]
 
 	if reqStatus == 0 || !ok {
-		if !ok {
-			pb.reqStatus[rid] = 0
-		}
 		if pb.isActivePrimary() && pb.lovalView.Backup != "" {
 			replicaArgs := SyncArgs{Type:args.Type,
 				KVMap:map[string]string{args.Key: args.Value}, NeedClear:false, ReqId:rid}
@@ -67,8 +65,7 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 				success := pb.doReplication(pb.lovalView.Backup, &replicaArgs)
 
 				if !success {
-					reply.Err = "Replicate to backup error!"
-					log.Println(reply.Err)
+					log.Println("Replicate to backup error!")
 
 					time.Sleep(viewservice.PingInterval)
 				} else {
@@ -78,6 +75,7 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 		}
 
 		if pb.isActivePrimary() {
+			pb.reqStatus[rid] = 0
 			if args.Type == "Put" {
 				pb.kvMap[args.Key] = args.Value
 			} else if args.Type == "Append" {
@@ -91,6 +89,9 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 			}
 
 			pb.reqStatus[rid] = 1
+			reply.Err = OK
+
+			return nil
 		} else {
 			reply.Err = "The server is not primary or not valid to do the replication"
 		}
@@ -132,6 +133,9 @@ func (pb *PBServer) Sync(args *SyncArgs, reply *SyncReply) error {
 			}
 		}
 	}
+
+	pb.reqStatus[args.ReqId] = 1
+	reply.Err = OK
 
 	return nil
 }
@@ -179,7 +183,7 @@ func (pb *PBServer) doReplication(backup string, args *SyncArgs) bool {
 	log.Println("Do replication %s", args)
 	backupReply := SyncReply{}
 	ok := call(backup, "PBServer.Sync", &args, &backupReply)
-	if ok == false {
+	if ok == false || backupReply.Err != OK {
 		log.Println("Replica error, %s", args)
 		return false
 	}
