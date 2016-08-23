@@ -8,6 +8,7 @@ import "crypto/rand"
 import (
 	"math/big"
 	"time"
+	"strconv"
 )
 
 
@@ -15,7 +16,8 @@ type Clerk struct {
 	vs *viewservice.Clerk
 	// Your declarations here
 
-	primary string
+	primary  string
+	clientId string
 }
 
 // this may come in handy.
@@ -32,6 +34,7 @@ func MakeClerk(vshost string, me string) *Clerk {
 	// Your ck.* initializations here
 
 	ck.primary = ""
+	ck.clientId = strconv.FormatInt(nrand(), 10)
 
 	return ck
 }
@@ -116,8 +119,10 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		ck.updatePrimary()
 	}
 
+	rid := strconv.FormatInt(nrand(), 10)
+
 	for {
-		args := PutAppendArgs{Key:key, Value:value, Type:op, IsReplica:false}
+		args := PutAppendArgs{Key:key, Value:value, Type:op, IsReplica:false, ReqId:rid}
 		var reply GetReply
 		ok := call(ck.primary, "PBServer.PutAppend", &args, &reply)
 

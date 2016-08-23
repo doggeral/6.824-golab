@@ -18,6 +18,8 @@ type PutAppendArgs struct {
 	// otherwise RPC will break.
 	Type  string
 	IsReplica bool
+	ReqId     string
+	ClientId  string
 }
 
 type PutAppendReply struct {
@@ -35,4 +37,15 @@ type GetReply struct {
 }
 
 
+type SyncArgs struct {
+	Type  string
+	ReqId     string
+	ClientId  string
+	KVMap   map[string]string
+	NeedClear bool
+}
+
+type SyncReply struct {
+	Err Err
+}
 // Your RPC definitions here.

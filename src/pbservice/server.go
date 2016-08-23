@@ -10,7 +10,10 @@ import "sync"
 import "sync/atomic"
 import "os"
 import "syscall"
-import "math/rand"
+import (
+	"math/rand"
+	"strconv"
+)
 
 
 
@@ -24,6 +27,7 @@ type PBServer struct {
 	// Your declarations here.
 
 	kvMap      map[string]string
+	reqStatus  map[string]int
 	lovalView  viewservice.View
 	state      string
 }
@@ -48,30 +52,50 @@ func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error 
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
-	if pb.isActivePrimary() && pb.lovalView.Backup != "" {
-		replicaArgs := PutAppendArgs{Key:args.Key, Type:args.Type, Value:args.Value, IsReplica:true}
-		success := pb.doReplication(pb.lovalView.Backup, &replicaArgs)
+	rid := args.ReqId
+	reqStatus, ok := pb.reqStatus[rid]
 
-		if !success {
-			reply.Err = "Replicate to backup error!"
-			return nil
+	if reqStatus == 0 || !ok {
+		if !ok {
+			pb.reqStatus[rid] = 0
 		}
-	}
+		if pb.isActivePrimary() && pb.lovalView.Backup != "" {
+			replicaArgs := SyncArgs{Type:args.Type,
+				KVMap:map[string]string{args.Key: args.Value}, NeedClear:false, ReqId:rid}
 
-	if pb.isActivePrimary() || args.IsReplica {
-		if args.Type == "Put" {
-			pb.kvMap[args.Key] = args.Value
-		} else if args.Type == "Append" {
-			val,ok := pb.kvMap[args.Key]
+			for {
+				success := pb.doReplication(pb.lovalView.Backup, &replicaArgs)
 
-			if ok {
-				pb.kvMap[args.Key] = val + args.Value
-			} else {
-				pb.kvMap[args.Key] = args.Value
+				if !success {
+					reply.Err = "Replicate to backup error!"
+					log.Println(reply.Err)
+
+					time.Sleep(viewservice.PingInterval)
+				} else {
+					break
+				}
 			}
 		}
+
+		if pb.isActivePrimary() {
+			if args.Type == "Put" {
+				pb.kvMap[args.Key] = args.Value
+			} else if args.Type == "Append" {
+				val, ok := pb.kvMap[args.Key]
+
+				if ok {
+					pb.kvMap[args.Key] = val + args.Value
+				} else {
+					pb.kvMap[args.Key] = args.Value
+				}
+			}
+
+			pb.reqStatus[rid] = 1
+		} else {
+			reply.Err = "The server is not primary or not valid to do the replication"
+		}
 	} else {
-		reply.Err = "The server is not primary or not valid to do the replication"
+		reply.Err = "Duplicate request"
 	}
 
 
@@ -84,6 +108,32 @@ func (pb *PBServer) isActivePrimary () bool{
 	}
 
 	return  false
+}
+
+func (pb *PBServer) Sync(args *SyncArgs, reply *SyncReply) error {
+	log.Println("get replica: %s", args)
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+
+	if args.NeedClear {
+		pb.kvMap = make(map[string]string)
+	}
+
+	for key,val := range args.KVMap {
+		if args.Type == "Put" {
+			pb.kvMap[key] = val
+		} else if args.Type == "Append" {
+			value, ok := pb.kvMap[key]
+
+			if ok {
+				pb.kvMap[key] = value + val
+			} else {
+				pb.kvMap[key] = val
+			}
+		}
+	}
+
+	return nil
 }
 
 //
@@ -100,9 +150,16 @@ func (pb *PBServer) tick() {
 	// Replica all data to new backup server
 	if pb.isActivePrimary() && view.Backup != "" && pb.lovalView.Backup != view.Backup {
 		log.Println("%s replica all", pb.me)
-		for key,value := range pb.kvMap {
-			replicaArgs := PutAppendArgs{Key:key, Type:"Put", Value:value, IsReplica:true}
-			pb.doReplication(view.Backup, &replicaArgs)
+
+		rid := strconv.FormatInt(nrand(), 10)
+		replicaArgs := SyncArgs{Type:"Put",
+		KVMap:pb.kvMap, NeedClear:true, ReqId:rid}
+		success := pb.doReplication(view.Backup, &replicaArgs)
+
+		if !success {
+			//reply.Err = "Replicate to backup error!"
+			//			return nil
+			log.Println("Replicate to backup error!")
 		}
 	}
 	pb.lovalView = view
@@ -117,10 +174,11 @@ func (pb *PBServer) tick() {
 
 }
 
-func (pb *PBServer) doReplication(backup string, args *PutAppendArgs) bool {
+func (pb *PBServer) doReplication(backup string, args *SyncArgs) bool {
 	// replica the data to backup
-	backupReply := PutAppendReply{}
-	ok := call(backup, "PBServer.PutAppend", &args, &backupReply)
+	log.Println("Do replication %s", args)
+	backupReply := SyncReply{}
+	ok := call(backup, "PBServer.Sync", &args, &backupReply)
 	if ok == false {
 		log.Println("Replica error, %s", args)
 		return false
@@ -161,6 +219,7 @@ func StartServer(vshost string, me string) *PBServer {
 	pb.vs = viewservice.MakeClerk(me, vshost)
 	// Your pb.* initializations here.
 	pb.kvMap = make(map[string] string)
+	pb.reqStatus = make(map[string] int)
 	pb.state = "NONE"
 	pb.lovalView = viewservice.View{0, "", ""}
 
